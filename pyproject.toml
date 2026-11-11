@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spc-redbook"
+version = "1.0.1"
+description = "Convert SPC convective outlook GIS data to AWIPS/EDEX Redbook graphics"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Public Domain" }
+authors = [{ name = "AWIPS tools contributors" }]
+keywords = ["awips", "edex", "redbook", "spc", "outlook", "gis", "nws"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "License :: Public Domain",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
+dependencies = []
+
+[project.scripts]
+spc-redbook = "spc_redbook.cli:main"
+
+[tool.setuptools]
+packages = ["spc_redbook"]
