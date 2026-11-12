@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spc-redbook"
-version = "1.0.1"
+version = "1.1.0"
 description = "Convert SPC convective outlook GIS data to AWIPS/EDEX Redbook graphics"
 readme = "README.md"
 requires-python = ">=3.8"

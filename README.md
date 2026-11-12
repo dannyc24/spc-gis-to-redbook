@@ -49,6 +49,26 @@ spc-redbook https://www.spc.noaa.gov/products/outlook/day1otlk-shp.zip \
     --layer all --out redbook
 ```
 
+Convert all current day 2 layers (categorical plus tornado, hail, and wind):
+
+```bash
+spc-redbook https://www.spc.noaa.gov/products/outlook/day2otlk-shp.zip \
+    --layer all --out redbook
+```
+
+Convert the experimental day 4-8 probabilistic outlooks:
+
+```bash
+for day in 4 5 6 7 8; do
+    spc-redbook \
+        "https://www.spc.noaa.gov/products/exper/day4-8/day${day}prob-shp.zip" \
+        --out redbook
+done
+```
+
+The day is inferred from `day4` ... `day8` in the filename, and `--layer`
+defaults to `prob` on days 4-8.  You can also pass `--day 4` explicitly.
+
 Convert an archived issuance to one explicit file:
 
 ```bash
@@ -80,7 +100,7 @@ Useful options:
 | --- | --- |
 | `--layer`, `-l` | Layer or comma-separated layers, or `all` |
 | `--out`, `-o` | Directory, explicit `.rbk`/`.redbook` file, or `-` |
-| `--day` | Outlook day (1, 2, or 3); otherwise inferred from the input name |
+| `--day` | Outlook day (1-8); otherwise inferred from the input name |
 | `--wmo` | Override the six-character WMO/AWIPS ID (single layer only) |
 | `--width`, `--height` | Redbook plot-space size (default 1024x768) |
 | `--bounds W,S,E,N` | Fixed map bounds instead of fitting the data |
@@ -100,13 +120,36 @@ are resolved by the converter:
 | Layer | Meaning |
 | --- | --- |
 | `cat` | Categorical (`TSTM`/`MRGL`/`SLGT`/`ENH`/`MDT`/`HIGH`) |
-| `torn`, `hail`, `wind` | Individual hazard probability areas (day 1) |
-| `prob`, `severe` | All-severe probability; uses a physical `prob` layer when present, otherwise merges `torn`+`hail`+`wind` |
+| `torn`, `hail`, `wind` | Individual hazard probability areas (days 1 and 2) |
+| `prob`, `severe` | All-severe probability; uses a physical `prob` layer when present, otherwise merges `torn`+`hail`+`wind`.  This is the only layer on days 4-8. |
 | `sig` | Significant-severe areas; uses separate `sig*` files when present, otherwise `LABEL=SIGN` areas from the hazard layers |
 | `sigtorn`, `sighail`, `sigwind` | Significant areas for one hazard |
 | `cigprob`, `cigtorn`, `cighail`, `cigwind` | Conditional-intensity-group passthrough layers |
 
-`all` expands to `cat,torn,hail,wind` on day 1 and `cat,prob` on days 2 and 3.
+`all` expands to `cat,torn,hail,wind` on days 1 and 2, `cat,prob` on day 3,
+and `prob` on days 4-8.
+
+### Day 4-8 outlooks
+
+SPC publishes the experimental day 4-8 outlooks as one probabilistic
+shapefile per day:
+
+* `https://www.spc.noaa.gov/products/exper/day4-8/day4prob-shp.zip`
+* `https://www.spc.noaa.gov/products/exper/day4-8/day5prob-shp.zip`
+* `https://www.spc.noaa.gov/products/exper/day4-8/day6prob-shp.zip`
+* `https://www.spc.noaa.gov/products/exper/day4-8/day7prob-shp.zip`
+* `https://www.spc.noaa.gov/products/exper/day4-8/day8prob-shp.zip`
+
+GeoJSON versions (`day4prob.lyr.geojson`, ...) are also available from the
+[SPC GIS page](https://www.spc.noaa.gov/gis/).  The shapefile archives include
+an `.info` sidecar with the 12Z-to-12Z valid window; the converter reads it
+automatically.  When the archive has no areas, SPC writes a tiny `DN=0`
+placeholder polygon or a `Predictability Too Low` GeoJSON feature.  Those
+records are ignored, and a legend-only product is written instead.
+
+The issue time for Day 4-8 shapefiles is estimated as 09Z on the date in the
+filename because the `.info` file does not contain it.  GeoJSON and DBF
+attributes, when present, take precedence.
 
 ## Product IDs
 
@@ -119,13 +162,21 @@ Official NWSI 10-512 Redbook identifiers are used by default:
 | 1 | `hail` | `PENE00` | 24 |
 | 1 | `wind` | `PWNE00` | 24 |
 | 2 | `cat` | `PGWI47` | 48 |
+| 2 | `torn` | `PGNE02` | 48 |
+| 2 | `hail` | `PENE02` | 48 |
+| 2 | `wind` | `PWNE02` | 48 |
 | 2 | `prob` | `PGNI00` | 48 |
 | 3 | `cat` | `PGWK48` | 72 |
 | 3 | `prob` | `PZNK00` | 72 |
+| 4 | `prob` | `PGNW49` | 96 |
+| 5 | `prob` | `PGNW50` | 120 |
+| 6 | `prob` | `PGNW51` | 144 |
+| 7 | `prob` | `PGNW52` | 168 |
+| 8 | `prob` | `PGNW53` | 192 |
 
-If a layer has no official ID, the day's categorical ID is used and a warning
-is printed; override it with `--wmo`.  Output files are named
-`<WMO>_<layer>.rbk`.
+If a layer has no official ID, the day's categorical ID is used (or its
+probabilistic ID on days 4-8), and a warning is printed; override it with
+`--wmo`.  Output files are named `<WMO>_<layer>.rbk`.
 
 EDEX determines the forecast hour from the WMO ID (via
 `redbookFcstMap.xml`), not from the product-ID block, so changing the WMO ID
@@ -155,7 +206,8 @@ with `--wmo` also changes the forecast-hour mapping.
 
 For recurring generation, run the command from cron or a systemd timer.  A
 typical schedule is shortly after each SPC issuance (about 06Z, 13Z, 16:30Z,
-20Z, and 01Z for day 1; see NWSI 10-512 for the full schedule).
+20Z, and 01Z for day 1; days 4-8 update once daily around 09Z; see NWSI 10-512
+for the full schedule).
 
 ## How the output is built
 
@@ -223,3 +275,5 @@ hatching, product-ID mapping, output naming, and the CLI.
 * The encoder deliberately writes the 28-byte product-ID payload used by real
   NOAA/GEMPAK files, not the inconsistent length test in AWIPS'
   `ProductIdBlock` parser.
+* Days 4-8 are emitted as separate per-day products (`PGNW49` ... `PGNW53`).
+  The combined `PGNM98` Day 4-8 composite is not generated.

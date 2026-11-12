@@ -49,9 +49,9 @@ PRODUCT_IDS: Dict[int, Dict[str, str]] = {
     },
     2: {
         "cat": "PGWI47",
-        "torn": "PGNI00",
-        "hail": "PGNI00",
-        "wind": "PGNI00",
+        "torn": "PGNE02",
+        "hail": "PENE02",
+        "wind": "PWNE02",
         "prob": "PGNI00",
         "severe": "PGNI00",
         "sig": "PGNI00",
@@ -62,6 +62,11 @@ PRODUCT_IDS: Dict[int, Dict[str, str]] = {
         "severe": "PZNK00",
         "sig": "PZNK00",
     },
+    4: {"prob": "PGNW49"},
+    5: {"prob": "PGNW50"},
+    6: {"prob": "PGNW51"},
+    7: {"prob": "PGNW52"},
+    8: {"prob": "PGNW53"},
 }
 
 LAYER_TITLES: Dict[str, str] = {
@@ -192,7 +197,22 @@ def _format_percent(value: float) -> str:
 
 
 def _is_placeholder(label: str) -> bool:
-    return label.strip().lower().startswith("less than")
+    low = label.strip().lower()
+    return low.startswith("less than") or low.startswith("predictability too low")
+
+
+def _is_no_area(feature: Feature) -> bool:
+    """Return True for SPC's placeholder records on days with no outlook area.
+
+    Day 4-8 shapefiles always contain one tiny placeholder polygon near Cape
+    Cod with ``DN=0`` and no label when nothing is forecast.  The GeoJSON form
+    uses an empty geometry and ``LABEL=Predictability Too Low``.  Neither
+    should be drawn or labelled.
+    """
+    label = feature.get("LABEL").strip()
+    if label.lower().startswith("predictability too low"):
+        return True
+    return not label and _dn(feature) == 0
 
 
 def _label_for(feature: Feature, layer: str) -> Tuple[str, float, bool]:
@@ -236,7 +256,7 @@ def prepare_areas(features: Iterable[Feature], layer: str) -> List[OutlookArea]:
     areas: List[OutlookArea] = []
     seen = set()
     for feature in features:
-        if feature.empty:
+        if feature.empty or _is_no_area(feature):
             continue
         label, rank, significant = _label_for(feature, layer)
         signature = (label, feature.geometry_signature())
@@ -413,6 +433,8 @@ def hatch_ring(
 
 
 def outlook_title(day: int, layer: str) -> str:
+    if day >= 4:
+        return f"SPC DAY {day} SEVERE OUTLOOK"
     title = LAYER_TITLES.get(layer.lower(), layer.upper())
     if title.endswith("AREAS"):
         return f"SPC DAY {day} {title}"
@@ -420,9 +442,19 @@ def outlook_title(day: int, layer: str) -> str:
 
 
 def product_id(day: int, layer: str) -> str:
-    """Return the AWIPS/WMO Redbook ID for a day/layer, or the day's cat ID."""
+    """Return the AWIPS/WMO Redbook ID for a day/layer.
+
+    Unknown layers fall back to the day's categorical product ID, or to the
+    probabilistic product on days that only have a probabilistic outlook.
+    """
     day_map = PRODUCT_IDS.get(day, PRODUCT_IDS[1])
-    return day_map.get(layer.lower(), day_map["cat"])
+    key = layer.lower()
+    if key in day_map:
+        return day_map[key]
+    for fallback in ("cat", "prob"):
+        if fallback in day_map:
+            return day_map[fallback]
+    return next(iter(day_map.values()))
 
 
 def is_known_product(day: int, layer: str) -> bool:

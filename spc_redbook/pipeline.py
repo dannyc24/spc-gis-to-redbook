@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -29,8 +30,13 @@ from .redbook import (
 
 ALL_LAYERS: Dict[int, List[str]] = {
     1: ["cat", "torn", "hail", "wind"],
-    2: ["cat", "prob"],
+    2: ["cat", "torn", "hail", "wind"],
     3: ["cat", "prob"],
+    4: ["prob"],
+    5: ["prob"],
+    6: ["prob"],
+    7: ["prob"],
+    8: ["prob"],
 }
 
 _LAYER_ALIASES = {
@@ -189,6 +195,28 @@ def load_layer_features(source: DataSource, layer: str) -> List[Feature]:
     return source.layer(layer)
 
 
+def _issue_from_filenames(source: DataSource, day: int) -> Optional[datetime]:
+    """Estimate the Day 4-8 issue time from the issuance date in the filename.
+
+    SPC's Day 4-8 shapefile ``.info`` sidecars contain valid/expire times but
+    not the issue time.  Filenames look like ``day4otlk_20240425_prob.shp``;
+    the outlook is issued that morning around 09Z.  When the DBF/GeoJSON
+    carries an explicit issue time it is used instead.
+    """
+    if day < 4:
+        return None
+    for name in source.files:
+        match = re.search(r"(?<!\d)(\d{8})(?!\d)", os.path.basename(name))
+        if not match:
+            continue
+        try:
+            issued = datetime.strptime(match.group(1), "%Y%m%d")
+        except ValueError:
+            continue
+        return issued.replace(hour=9)
+    return None
+
+
 def _infer_times(
     features: Iterable[Feature],
     source: DataSource,
@@ -203,13 +231,17 @@ def _infer_times(
         times.valid = times.valid or fallback.valid
         times.expire = times.expire or fallback.expire
 
+    if times.issue is None:
+        times.issue = _issue_from_filenames(source, day)
+
     now = datetime.now(timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
     if times.issue is None:
         times.issue = times.valid or now
     if times.valid is None:
         times.valid = times.issue
     if times.expire is None:
-        times.expire = times.valid + timedelta(hours=24 * max(1, day))
+        # Every SPC outlook day is a 24-hour valid window.
+        times.expire = times.valid + timedelta(hours=24)
     return times
 
 

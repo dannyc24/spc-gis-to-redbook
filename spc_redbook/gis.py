@@ -16,6 +16,7 @@ import struct
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 LonLat = Tuple[float, float]
@@ -178,6 +179,10 @@ class DataSource:
                 low = base.lower()
                 break
         base = re.sub(r"\.(lyr|nolyr)$", "", base, flags=re.IGNORECASE)
+        # SPC Day 4-8 GeoJSON uses names such as ``day4prob`` with no
+        # underscore, so the generic suffix rule below cannot see the layer.
+        if re.fullmatch(r"day[4-8]prob", base, flags=re.IGNORECASE):
+            return "prob"
         if "_" in base:
             return base.rsplit("_", 1)[-1]
         return base
@@ -207,10 +212,15 @@ class DataSource:
             # SPC publishes e.g. ``day1otlk_cat.nolyr.geojson``; the
             # .lyr/.nolyr qualifier sits between the layer and the extension.
             normalized = re.sub(r"\.(?:lyr|nolyr)(?=\.[^.]+$)", "", base)
+            matched = False
             for ext in extensions:
                 if normalized.endswith("_" + layer.lower() + ext):
                     result.append(name)
+                    matched = True
                     break
+            if not matched and self.infer_layer(name).lower() == layer.lower():
+                if any(normalized.endswith(ext) for ext in extensions):
+                    result.append(name)
         return sorted(result, key=self._preference)
 
     def _single_shapefile(self) -> Optional[str]:
@@ -254,12 +264,40 @@ class DataSource:
         if shapefiles:
             shp_name = shapefiles[0]
             dbf = self._read_sibling(shp_name, _DBF_EXTENSION)
-            return parse_shapefile(
+            features = parse_shapefile(
                 self.read(shp_name),
                 dbf,
                 layer=layer,
                 source=f"{self.label}:{shp_name}",
             )
+            info = self._read_sibling(shp_name, ".info")
+            info_times = parse_info_times(info) if info else {}
+            if info_times:
+                if features:
+                    for feature in features:
+                        if not (
+                            feature.get("VALID") or feature.get("VALID_ISO")
+                        ) and info_times.get("VALID_ISO"):
+                            feature.attrs["VALID_ISO"] = info_times["VALID_ISO"]
+                        if not (
+                            feature.get("EXPIRE")
+                            or feature.get("EXPIRE_ISO")
+                        ) and info_times.get("EXPIRE_ISO"):
+                            feature.attrs["EXPIRE_ISO"] = info_times[
+                                "EXPIRE_ISO"
+                            ]
+                else:
+                    # SPC's Day 4-8 "no areas" shapefiles contain a null
+                    # record; keep the valid/expire times from the .info file.
+                    features = [
+                        Feature(
+                            layer=layer,
+                            rings=[],
+                            attrs=dict(info_times),
+                            source=f"{self.label}:{shp_name}",
+                        )
+                    ]
+            return features
 
         geojson = self._candidates(layer, (".geojson", ".json"))
         if not geojson:
@@ -290,6 +328,44 @@ class DataSource:
 # ---------------------------------------------------------------------------
 # Shapefile / DBF parsing
 # ---------------------------------------------------------------------------
+
+
+_INFO_TIME_RE = re.compile(
+    r"Product\s+Valid\s+Time\s+(Begin|End)\s*:\s*(.+)", re.IGNORECASE
+)
+
+
+def parse_info_times(data: bytes) -> Dict[str, str]:
+    """Extract valid/expire times from an SPC ``.info`` sidecar file.
+
+    Day 4-8 shapefile archives include a small text file such as::
+
+        Product Valid Time Begin: 2024-04-28 12:00:00+00:00
+        Product Valid Time End: 2024-04-29 12:00:00+00:00
+
+    These are returned as ``VALID_ISO``/``EXPIRE_ISO`` attributes so the
+    normal time collection in :mod:`spc_redbook.outlook` can use them.
+    """
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = data.decode("latin-1", errors="replace")
+
+    attrs: Dict[str, str] = {}
+    for line in text.splitlines():
+        match = _INFO_TIME_RE.search(line)
+        if not match:
+            continue
+        value = match.group(2).strip()
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        key = "VALID_ISO" if match.group(1).lower() == "begin" else "EXPIRE_ISO"
+        attrs[key] = parsed.isoformat()
+    return attrs
 
 
 def parse_dbf(data: bytes) -> List[Dict[str, str]]:
@@ -511,7 +587,9 @@ def _from_zip_bytes(data: bytes, label: str) -> DataSource:
             if info.is_dir():
                 continue
             low = info.filename.lower()
-            if low.endswith((".shp", ".dbf", ".shx", ".prj", ".geojson", ".json")):
+            if low.endswith(
+                (".shp", ".dbf", ".shx", ".prj", ".info", ".geojson", ".json")
+            ):
                 files[info.filename] = archive.read(info)
     if not files:
         raise GisError(f"no GIS files found in {label}")
@@ -524,7 +602,7 @@ def _from_directory(path: str) -> DataSource:
         for name in names:
             low = name.lower()
             if not low.endswith(
-                (".shp", ".dbf", ".shx", ".prj", ".geojson", ".json")
+                (".shp", ".dbf", ".shx", ".prj", ".info", ".geojson", ".json")
             ):
                 continue
             full = os.path.join(root, name)
@@ -545,11 +623,12 @@ def _from_url(url: str) -> DataSource:
     name = os.path.basename(low) or "download"
     if low.endswith(".shp"):
         files[name] = data
-        dbf_url = url[:-4] + ".dbf"
-        try:
-            files[os.path.splitext(name)[0] + ".dbf"] = _fetch(dbf_url)
-        except Exception:
-            pass
+        stem = os.path.splitext(name)[0]
+        for extension in (".dbf", ".info"):
+            try:
+                files[stem + extension] = _fetch(url[:-4] + extension)
+            except Exception:
+                pass
     elif low.endswith((".geojson", ".json")) or data[:1] in (b"{", b"["):
         files[name + (".geojson" if not low.endswith((".geojson", ".json")) else "")] = data
     else:
@@ -580,10 +659,11 @@ def load_source(source: str) -> DataSource:
     low = path.lower()
     if low.endswith(".shp"):
         files[name] = data
-        dbf_path = os.path.splitext(path)[0] + ".dbf"
-        if os.path.exists(dbf_path):
-            with open(dbf_path, "rb") as handle:
-                files[os.path.basename(dbf_path)] = handle.read()
+        for extension in (".dbf", ".info"):
+            sidecar = os.path.splitext(path)[0] + extension
+            if os.path.exists(sidecar):
+                with open(sidecar, "rb") as handle:
+                    files[os.path.basename(sidecar)] = handle.read()
     elif low.endswith((".geojson", ".json")) or data[:1] in (b"{", b"["):
         files[name] = data
     else:

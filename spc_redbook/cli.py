@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from typing import List, Optional, Sequence
@@ -40,11 +41,20 @@ def _parse_bounds(value: Optional[str]) -> Optional[List[float]]:
     return bounds
 
 
+OUTLOOK_DAYS = (1, 2, 3, 4, 5, 6, 7, 8)
+
+
 def _detect_day(source: DataSource, explicit: Optional[int]) -> int:
-    if explicit in (1, 2, 3):
+    if explicit in OUTLOOK_DAYS:
         return explicit
-    haystack = " ".join([source.label] + list(source.files))
-    match = re.search(r"day\s*([123])", haystack, flags=re.IGNORECASE)
+    # Use basenames so a directory such as ``day4-8`` does not hide the real
+    # day in ``day5prob-shp.zip``.  The lookahead avoids treating ``day48`` as
+    # day 4 and ``day4-8`` as day 4.
+    names = [os.path.basename(source.label)] + [
+        os.path.basename(name) for name in source.files
+    ]
+    haystack = " ".join(names)
+    match = re.search(r"day\s*([1-8])(?![-\d])", haystack, flags=re.IGNORECASE)
     if match:
         return int(match.group(1))
     return 1
@@ -69,10 +79,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-l",
         "--layer",
-        default="cat",
         help=(
             "Layer(s) to render: cat, torn, hail, wind, prob/severe, sig, "
-            "sigtorn, sighail, sigwind, cigtorn, ...; comma-separated, or 'all'."
+            "sigtorn, sighail, sigwind, cigtorn, ...; comma-separated, or "
+            "'all'. Defaults to cat (days 1-3) or prob (days 4-8)."
         ),
     )
     parser.add_argument(
@@ -87,8 +97,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--day",
         type=int,
-        choices=(1, 2, 3),
-        help="Outlook day; detected from day1/day2/day3 in the input name.",
+        choices=OUTLOOK_DAYS,
+        help=(
+            "Outlook day (1-8); detected from day1 ... day8 in the input name."
+        ),
     )
     parser.add_argument(
         "--wmo",
@@ -215,7 +227,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     day = _detect_day(source, args.day)
-    layers = expand_layers(source, day, args.layer)
+    layer_spec = args.layer
+    if layer_spec is None:
+        # Days 4-8 have no categorical product; prob is their only layer.
+        layer_spec = "prob" if day >= 4 else "cat"
+    layers = expand_layers(source, day, layer_spec)
     if not layers:
         print("error: no layers selected", file=sys.stderr)
         return 2
@@ -260,7 +276,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 2
         if summary.areas == 0 and not args.quiet:
             print(
-                f"warning: layer {layer!r} has no polygon geometry; "
+                f"warning: layer {layer!r} has no drawable areas; "
                 "wrote an empty product with a legend.",
                 file=sys.stderr,
             )
