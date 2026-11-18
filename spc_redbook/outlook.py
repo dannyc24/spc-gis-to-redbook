@@ -45,6 +45,9 @@ PRODUCT_IDS: Dict[int, Dict[str, str]] = {
         "sigtorn": "PGNE00",
         "sighail": "PENE00",
         "sigwind": "PWNE00",
+        "cigtorn": "PGNE00",
+        "cighail": "PENE00",
+        "cigwind": "PWNE00",
         "sig": "PGNE00",
     },
     2: {
@@ -54,12 +57,17 @@ PRODUCT_IDS: Dict[int, Dict[str, str]] = {
         "wind": "PWNE02",
         "prob": "PGNI00",
         "severe": "PGNI00",
+        "cigtorn": "PGNE02",
+        "cighail": "PENE02",
+        "cigwind": "PWNE02",
+        "cigprob": "PGNI00",
         "sig": "PGNI00",
     },
     3: {
         "cat": "PGWK48",
         "prob": "PZNK00",
         "severe": "PZNK00",
+        "cigprob": "PZNK00",
         "sig": "PZNK00",
     },
     4: {"prob": "PGNW49"},
@@ -87,6 +95,7 @@ LAYER_TITLES: Dict[str, str] = {
 }
 
 _PROB_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*%")
+_CIG_RE = re.compile(r"^CIG(\d+)$", re.IGNORECASE)
 
 
 class OutlookError(ValueError):
@@ -221,7 +230,13 @@ def _label_for(feature: Feature, layer: str) -> Tuple[str, float, bool]:
     raw_upper = raw.upper()
     dn = _dn(feature)
     layer_lower = layer.lower()
-    significant = raw_upper == "SIGN" or layer_lower.startswith("sig")
+    cig = _CIG_RE.fullmatch(raw_upper)
+    significant = (
+        raw_upper == "SIGN"
+        or cig is not None
+        or layer_lower.startswith("sig")
+        or layer_lower.startswith("cig")
+    )
 
     if layer_lower == "cat" or raw_upper in CATEGORY_RANK:
         name = raw_upper if raw_upper in CATEGORY_RANK else CATEGORY_NAMES.get(dn or -1)
@@ -230,6 +245,8 @@ def _label_for(feature: Feature, layer: str) -> Tuple[str, float, bool]:
         return (name, CATEGORY_RANK.get(name, float(dn or 0)), False)
 
     if significant:
+        if cig is not None:
+            return (raw_upper[:8], 2000.0 + int(cig.group(1)), True)
         return ("SIG", 1000.0, True)
 
     probability = _probability(raw)

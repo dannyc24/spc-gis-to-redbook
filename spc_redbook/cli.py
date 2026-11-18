@@ -47,6 +47,9 @@ OUTLOOK_DAYS = (1, 2, 3, 4, 5, 6, 7, 8)
 def _detect_day(source: DataSource, explicit: Optional[int]) -> int:
     if explicit in OUTLOOK_DAYS:
         return explicit
+    metadata_day = source.metadata.get("day", "")
+    if metadata_day.isdigit() and int(metadata_day) in OUTLOOK_DAYS:
+        return int(metadata_day)
     # Use basenames so a directory such as ``day4-8`` does not hide the real
     # day in ``day5prob-shp.zip``.  The lookahead avoids treating ``day48`` as
     # day 4 and ``day4-8`` as day 4.
@@ -54,7 +57,10 @@ def _detect_day(source: DataSource, explicit: Optional[int]) -> int:
         os.path.basename(name) for name in source.files
     ]
     haystack = " ".join(names)
-    match = re.search(r"day\s*([1-8])(?![-\d])", haystack, flags=re.IGNORECASE)
+    match = re.search(r"\bday\s*([1-8])(?![-\d])", haystack, flags=re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"\bPTSDY([1-3])\b", haystack, flags=re.IGNORECASE)
     if match:
         return int(match.group(1))
     return 1
@@ -64,16 +70,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="spc-redbook",
         description=(
-            "Convert SPC convective outlook shapefiles/GeoJSON into AWIPS "
-            "Redbook graphics that EDEX can ingest."
+            "Convert SPC convective outlook GIS or PTSDY1-3 text products "
+            "into AWIPS Redbook graphics that EDEX can ingest."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "input",
         help=(
-            "SPC zip, shapefile, GeoJSON, directory, or HTTP(S) URL. "
-            "The zip may contain all outlook layers for one issuance."
+            "SPC zip, shapefile, GeoJSON, PTSDY1-3 text product, directory, "
+            "or HTTP(S) URL. The zip may contain all layers for one issuance."
         ),
     )
     parser.add_argument(
