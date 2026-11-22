@@ -178,7 +178,15 @@ def load_layer_features(source: DataSource, layer: str) -> List[Feature]:
     if layer == "sig":
         separate = [
             name
-            for name in ("sigtorn", "sighail", "sigwind")
+            for name in (
+                "sigtorn",
+                "sighail",
+                "sigwind",
+                "cigtorn",
+                "cighail",
+                "cigwind",
+                "cigprob",
+            )
             if name in source.layer_names()
         ]
         if separate:

@@ -18,7 +18,7 @@ or from the command line::
 
 from __future__ import annotations
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 from .gis import DataSource, Feature, load_source  # noqa: E402
 from .outlook import OutlookArea, prepare_areas  # noqa: E402

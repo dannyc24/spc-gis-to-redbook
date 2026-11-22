@@ -124,7 +124,14 @@ class Feature:
 
     @property
     def significant(self) -> bool:
-        return self.label.upper() == "SIGN"
+        upper = self.label.upper()
+        layer = self.layer.lower()
+        return (
+            upper == "SIGN"
+            or upper.startswith("CIG")
+            or layer.startswith("sig")
+            or layer.startswith("cig")
+        )
 
     def geometry_signature(self) -> Tuple:
         """Stable signature used to de-duplicate merged layers."""
@@ -144,6 +151,11 @@ class DataSource:
 
     files: Dict[str, bytes] = field(default_factory=dict)
     label: str = "<memory>"
+    #: Virtual layers produced by a text product.  ``layer()`` returns copies
+    #: so callers can safely retarget features when merging logical layers.
+    parsed_layers: Dict[str, List[Feature]] = field(default_factory=dict)
+    #: Optional provenance/metadata such as the outlook day and product times.
+    metadata: Dict[str, str] = field(default_factory=dict)
 
     # -- basic access ----------------------------------------------------------
     def names(self, suffix: str = "") -> List[str]:
@@ -198,12 +210,21 @@ class DataSource:
         return (penalty, len(name))
 
     def layer_names(self) -> List[str]:
-        layers = set()
+        layers = set(self.parsed_layers)
         for name in self.files:
             low = name.lower()
             if low.endswith(".shp") or low.endswith(".geojson") or low.endswith(".json"):
                 layers.add(self.infer_layer(name))
         return sorted(layers)
+
+    @staticmethod
+    def _clone_feature(feature: Feature, layer: Optional[str] = None) -> Feature:
+        return Feature(
+            layer=layer or feature.layer,
+            rings=[list(ring) for ring in feature.rings],
+            attrs=dict(feature.attrs),
+            source=feature.source,
+        )
 
     def _candidates(self, layer: str, extensions: Sequence[str]) -> List[str]:
         result = []
@@ -255,6 +276,12 @@ class DataSource:
         one shapefile or GeoJSON file, that file is used as a fallback so a
         single downloaded layer can be converted without knowing its name.
         """
+        if layer in self.parsed_layers:
+            return [
+                self._clone_feature(feature, layer)
+                for feature in self.parsed_layers[layer]
+            ]
+
         shapefiles = self._candidates(layer, (".shp",))
         if not shapefiles:
             single = self._single_shapefile()
@@ -619,6 +646,13 @@ def _from_url(url: str) -> DataSource:
     low = url.lower().split("?", 1)[0]
     if data[:4] == b"PK\x03\x04" or low.endswith(".zip"):
         return _from_zip_bytes(data, url)
+
+    # Import lazily: the text parser imports DataSource from this module.
+    from .text import is_outlook_text, parse_outlook_text
+
+    if is_outlook_text(data):
+        return parse_outlook_text(data, url)
+
     files: Dict[str, bytes] = {}
     name = os.path.basename(low) or "download"
     if low.endswith(".shp"):
@@ -653,6 +687,11 @@ def load_source(source: str) -> DataSource:
         data = handle.read()
     if data[:4] == b"PK\x03\x04" or path.lower().endswith(".zip"):
         return _from_zip_bytes(data, path)
+
+    from .text import is_outlook_text, parse_outlook_text
+
+    if is_outlook_text(data):
+        return parse_outlook_text(data, path)
 
     files: Dict[str, bytes] = {}
     name = os.path.basename(path)
